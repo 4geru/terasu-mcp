@@ -13,10 +13,6 @@ Rails.application.routes.draw do
     get  "line/callback",  to: "oauth#line_callback"
   end
 
-  # MCP endpoints
-  scope :mcp do
-    get  "/",    to: "mcp#index",  as: :mcp
-    post "/",    to: "mcp#handle"
-    get  "sse",  to: "mcp#sse",   as: :mcp_sse
-  end
+  # MCP endpoint (GET / POST / DELETE を handle で受ける)
+  match "/mcp", to: "mcp#handle", via: [:get, :post, :delete]
 end
