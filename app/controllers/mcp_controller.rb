@@ -1,5 +1,5 @@
 class McpController < ApplicationController
-  before_action :authenticate!
+  before_action :doorkeeper_authorize!
 
   TOOLS = [
     McpTools::IlluminateTool,
@@ -26,11 +26,4 @@ class McpController < ApplicationController
     render body: body_content, content_type: "application/json", status: status
   end
 
-  private
-
-  def authenticate!
-    token = request.headers["Authorization"]&.delete_prefix("Bearer ")
-    return if token && OauthToken.valid.exists?(token: token)
-    render json: { error: "unauthorized" }, status: :unauthorized
-  end
 end
