@@ -1,7 +1,7 @@
 class User < ApplicationRecord
-  devise :trackable
+  devise :trackable, :omniauthable, omniauth_providers: %i[line]
 
-  def self.find_or_create_from_line(line_user_id:)
-    find_or_create_by!(line_user_id: line_user_id)
+  def self.from_omniauth(auth)
+    find_or_create_by!(line_user_id: auth.uid)
   end
 end

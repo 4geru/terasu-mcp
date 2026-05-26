@@ -1,21 +1,20 @@
 class OauthController < ApplicationController
-  BASE_URL = ENV.fetch("BASE_URL", "http://localhost:3000")
-
-  # GET /.well-known/oauth-protected-resource
+  # GET /.well-known/oauth-protected-resource(/*resource)
   def protected_resource_metadata
+    resource_url = params[:resource].present? ? "#{base_url}/#{params[:resource]}" : base_url
     render json: {
-      resource: BASE_URL,
-      authorization_servers: [BASE_URL]
+      resource: resource_url,
+      authorization_servers: [base_url]
     }
   end
 
   # GET /.well-known/oauth-authorization-server
   def authorization_server_metadata
     render json: {
-      issuer: BASE_URL,
-      authorization_endpoint: "#{BASE_URL}/oauth/authorize",
-      token_endpoint: "#{BASE_URL}/oauth/token",
-      registration_endpoint: "#{BASE_URL}/register",
+      issuer: base_url,
+      authorization_endpoint: "#{base_url}/oauth/authorize",
+      token_endpoint: "#{base_url}/oauth/token",
+      registration_endpoint: "#{base_url}/register",
       response_types_supported: ["code"],
       grant_types_supported: ["authorization_code"],
       code_challenge_methods_supported: ["S256"]
@@ -38,5 +37,13 @@ class OauthController < ApplicationController
       grant_types:         ["authorization_code"],
       response_types:      ["code"]
     }, status: :created
+  end
+
+  private
+
+  # 実際のリクエストの host/port から組み立てるのでサーバーポート変更に自動追従する。
+  # リバースプロキシ越しでも X-Forwarded-* ヘッダ経由で正しい host_with_port が取得される。
+  def base_url
+    "#{request.protocol}#{request.host_with_port}"
   end
 end

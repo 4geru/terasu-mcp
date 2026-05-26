@@ -9,7 +9,7 @@ Doorkeeper.configure do
       User.find_by(id: session[:user_id])
     else
       session[:oauth_return_to] = request.fullpath
-      redirect_to "/sessions/line_authorize"
+      redirect_to "/users/auth/line"
     end
   end
 

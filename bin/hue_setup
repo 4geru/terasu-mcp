@@ -1,0 +1,177 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+require "json"
+require "net/http"
+require "openssl"
+require "socket"
+require "uri"
+
+ENV_PATH  = File.expand_path("../.env", __dir__)
+POLL_SECS = 60
+
+def fetch_bridges
+  uri  = URI("https://discovery.meethue.com/")
+  http = Net::HTTP.new(uri.host, uri.port)
+  http.use_ssl = true
+  http.open_timeout = 5
+  http.read_timeout = 5
+  JSON.parse(http.get(uri.path).body)
+rescue StandardError => e
+  warn "discovery.meethue.com 取得失敗: #{e.class}: #{e.message}"
+  []
+end
+
+def build_http(ip, use_ssl)
+  http = Net::HTTP.new(ip, use_ssl ? 443 : 80)
+  http.use_ssl = use_ssl
+  http.verify_mode = OpenSSL::SSL::VERIFY_NONE if use_ssl
+  http.open_timeout = 2
+  http.read_timeout = 2
+  http
+end
+
+def detect_scheme(ip)
+  [true, false].each do |ssl|
+    http = build_http(ip, ssl)
+    http.get("/api/0/config")
+    return ssl
+  rescue StandardError
+    next
+  end
+  nil
+end
+
+def request_api_key(ip, use_ssl)
+  http = build_http(ip, use_ssl)
+  req  = Net::HTTP::Post.new("/api", "Content-Type" => "application/json")
+  req.body = JSON.dump(devicetype: "terasu#mcp")
+  JSON.parse(http.request(req).body)
+end
+
+def update_env(updates)
+  lines = File.exist?(ENV_PATH) ? File.readlines(ENV_PATH) : []
+  updates.each do |key, value|
+    pattern = /^#{Regexp.escape(key)}=.*$/
+    line = "#{key}=#{value}\n"
+    idx = lines.find_index { |l| l =~ pattern }
+    idx ? lines[idx] = line : lines << line
+  end
+  File.write(ENV_PATH, lines.join)
+end
+
+def local_ipv4s
+  Socket.ip_address_list
+        .select { |a| a.ipv4? && !a.ipv4_loopback? }
+        .map(&:ip_address)
+        .reject { |ip| ip.start_with?("169.254.") }
+end
+
+def same_subnet_c?(a, b)
+  a.split(".")[0..2] == b.split(".")[0..2]
+end
+
+# Bridge id (EUI-64: AABBCC FFFE DDEEFF) から MAC OUI (aa:bb:cc) を取り出して
+# arp テーブルから一致する IP を探す。
+def find_via_arp(bridge_id)
+  return [] unless bridge_id && bridge_id.length >= 6
+  oui = bridge_id[0, 6].downcase.scan(/../).join(":")
+  output = `arp -an 2>/dev/null`
+  output.each_line.filter_map { |l| Regexp.last_match(1) if l =~ /\(([0-9.]+)\)\s+at\s+#{Regexp.escape(oui)}/i }.uniq
+end
+
+env_ip = ENV["HUE_BRIDGE_IP"]
+override = env_ip && !env_ip.empty? && env_ip != "192.168.1.100"
+
+candidates = []
+bridge_id  = nil
+
+if override
+  puts "HUE_BRIDGE_IP=#{env_ip} を優先で試します"
+  candidates << env_ip
+else
+  puts "Hue Bridge を検索中 (discovery.meethue.com)..."
+  bridges = fetch_bridges
+  if bridges.empty?
+    warn "クラウド discovery では Bridge が見つかりません"
+  else
+    bridge_id = bridges.first["id"]
+    candidates << bridges.first["internalipaddress"]
+    puts "  クラウド検出: #{candidates.last} (id: #{bridge_id})"
+  end
+
+  arp_hits = find_via_arp(bridge_id)
+  unless arp_hits.empty?
+    puts "  ARP テーブル一致: #{arp_hits.join(", ")}"
+    candidates.concat(arp_hits)
+  end
+end
+
+candidates.uniq!
+abort "Bridge の候補 IP が一つもありません。Bridge と同じ Wi-Fi に繋いで再実行してください。" if candidates.empty?
+
+mine = local_ipv4s
+puts "自マシンの IPv4: #{mine.join(", ")}" unless mine.empty?
+
+ip      = nil
+use_ssl = nil
+candidates.each do |c|
+  scheme = detect_scheme(c)
+  if scheme.nil?
+    warn "  #{c}: 接続不可"
+    next
+  end
+  ip      = c
+  use_ssl = scheme
+  puts "  #{c}: #{use_ssl ? "https" : "http"} で接続 OK"
+  break
+end
+
+if ip.nil?
+  warn ""
+  warn "どの候補 IP にも到達できませんでした。考えられる原因:"
+  warn "  - 自マシンが Bridge と別のネットワーク (Wi-Fi/VPN/ゲスト) にいる"
+  warn "  - Bridge の電源/LAN がオフ"
+  if !mine.empty? && candidates.any? { |c| !mine.any? { |m| same_subnet_c?(m, c) } }
+    warn "  - サブネットが食い違っています (自分: #{mine.join(",")}, 候補: #{candidates.join(",")})"
+  end
+  warn ""
+  warn "別 IP を試すには:  HUE_BRIDGE_IP=192.168.x.x make hue-setup"
+  abort
+end
+
+puts ""
+puts "Bridge 本体の中央リンクボタンを押してください... (#{POLL_SECS} 秒以内)"
+
+api_key  = nil
+last_msg = nil
+POLL_SECS.times do
+  begin
+    res = request_api_key(ip, use_ssl)
+    if res.is_a?(Array) && (success = res.dig(0, "success"))
+      api_key = success["username"]
+      break
+    elsif res.is_a?(Array) && (err = res.dig(0, "error"))
+      last_msg = "#{err["type"]} #{err["description"]}"
+    else
+      last_msg = "unexpected response: #{res.inspect}"
+    end
+  rescue StandardError => e
+    last_msg = "#{e.class}: #{e.message}"
+  end
+  print "."
+  $stdout.flush
+  sleep 1
+end
+puts ""
+
+unless api_key
+  warn "最後のレスポンス: #{last_msg}" if last_msg
+  abort "タイムアウト。リンクボタンを押してから `make hue-setup` を再実行してください。"
+end
+
+update_env("HUE_BRIDGE_IP" => ip, "HUE_API_KEY" => api_key)
+
+puts ".env を更新しました:"
+puts "  HUE_BRIDGE_IP=#{ip}"
+puts "  HUE_API_KEY=#{api_key}"

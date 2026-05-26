@@ -36,6 +36,12 @@ gem "bcrypt", "~> 3.1.7"
 gem "devise"
 gem "doorkeeper"
 
+# OmniAuth — LINE Strategy は lib/omniauth/strategies/line.rb に自前実装
+# Doorkeeper からの GET リダイレクトで OmniAuth を起動するため csrf_protection gem は入れない
+# (CSRF は OAuth の state パラメータで担保)
+gem "omniauth"
+gem "omniauth-oauth2"
+
 group :development, :test do
   # See https://guides.rubyonrails.org/debugging_rails_applications.html#debugging-with-the-debug-gem
   gem "debug", platforms: %i[ mri windows ]

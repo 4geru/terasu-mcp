@@ -26,7 +26,9 @@ module ProjectRailsRemoteMcp
     # Please, add to the `ignore` list any other `lib` subdirectories that do
     # not contain `.rb` files, or that should not be reloaded or eager loaded.
     # Common ones are `templates`, `generators`, or `middleware`, for example.
-    config.autoload_lib(ignore: %w(assets tasks))
+    # lib/omniauth は OmniAuth::Strategies 名前空間 (Zeitwerk のデフォルト inflector では
+    # OmniauthStrategies と解釈される) を持つため Zeitwerk 管理から外し、明示 require で読む。
+    config.autoload_lib(ignore: %w(assets tasks omniauth))
 
     # Configuration for the application, engines, and railties goes here.
     #
